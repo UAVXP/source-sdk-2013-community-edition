@@ -29,10 +29,10 @@ $Project "Client (SDK2013CE)"
 		
 		$Folder "sdk2013ce"
 		{
-		//$File	"sdk2013ce\c_lights.cpp"
-		//$File	"sdk2013ce\c_lights.h"
-		//$File	"sdk2013ce\c_sdk2013ce_util.cpp"
-		//$File	"sdk2013ce\c_sdk2013ce_util.h"
+		$File	"sdk2013ce\c_lights.cpp"
+		$File	"sdk2013ce\c_lights.h"
+		$File	"sdk2013ce\c_sdk2013ce_util.cpp"
+		$File	"sdk2013ce\c_sdk2013ce_util.h"
 		}
 		
 		$Folder	"HL2 DLL"

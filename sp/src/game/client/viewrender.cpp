@@ -78,12 +78,34 @@
 #include "ShaderEditor/ShaderEditorSystem.h"
 #endif
 
+#ifdef SDK2013CE
+#include "c_lights.h"
+#include "c_sdk2013ce_util.h"
+#endif
+
 // Projective textures
 #include "C_Env_Projected_Texture.h"
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
+// CSM
+static ConVar sdk2013ce_csm_color_light("sdk2013ce_csm_color_light", "0");
+static ConVar sdk2013ce_csm_color_ambient("sdk2013ce_csm_color_ambient", "0");
+
+static Vector ConvertLightmapGammaToLinear(int *iColor4)
+{
+	Vector vecColor;
+	for (int i = 0; i < 3; ++i)
+	{
+		vecColor[i] = powf(iColor4[i] / 255.0f, 2.2f);
+	}
+	vecColor *= iColor4[3] / 255.0f;
+	return vecColor;
+}
+
+static bool requireDepthForDoF = false;
+// END CSM
 
 static void testfreezeframe_f( void )
 {
@@ -1315,7 +1337,7 @@ bool CViewRender::UpdateShadowDepthTexture( ITexture *pRenderTarget, ITexture *p
 //-----------------------------------------------------------------------------
 // Purpose: Renders world and all entities, etc.
 //-----------------------------------------------------------------------------
-void CViewRender::ViewDrawScene( bool bDrew3dSkybox, SkyboxVisibility_t nSkyboxVisible, const CViewSetup &view, 
+void CViewRender::ViewDrawScene( CascadedConfigMode cascadedMode, bool bDrew3dSkybox, SkyboxVisibility_t nSkyboxVisible, const CViewSetup &view, 
 								int nClearFlags, view_id_t viewID, bool bDrawViewModel, int baseDrawFlags, ViewCustomVisibility_t *pCustomVisibility )
 {
 	VPROF( "CViewRender::ViewDrawScene" );
@@ -1331,6 +1353,19 @@ void CViewRender::ViewDrawScene( bool bDrew3dSkybox, SkyboxVisibility_t nSkyboxV
 	if ( r_flashlightdepthtexture.GetBool() && (viewID == VIEW_MAIN) )
 	{
 		g_pClientShadowMgr->ComputeShadowDepthTextures( view );
+		CMatRenderContextPtr pRenderContext(materials);
+
+		// CSM
+		if (g_pCSMEnvLight != NULL && g_pCSMEnvLight->IsCascadedShadowMappingEnabled() &&
+			SupportsCascadedShadows() && cascadedMode != CASCADEDCONFIG_NONE)
+		{
+			UpdateCascadedShadow(view, cascadedMode);
+		}
+		else
+		{
+			pRenderContext->SetIntRenderingParameter(INT_CASCADED_DEPTHTEXTURE, 0);
+		}
+		// END CSM
 	}
 
 	m_BaseDrawFlags = baseDrawFlags;
@@ -1865,6 +1900,193 @@ void CViewRender::CleanupMain3DView( const CViewSetup &view )
 	render->PopView( GetFrustum() );
 }
 
+void CViewRender::UpdateCascadedShadow( const CViewSetup &view, CascadedConfigMode mode )
+{
+	static CTextureReference s_CascadedShadowDepthTexture;
+	static CTextureReference s_CascadedShadowColorTexture;
+	if ( !s_CascadedShadowDepthTexture.IsValid() )
+	{
+		s_CascadedShadowDepthTexture.Init( materials->FindTexture( "_rt_CascadedShadowDepth", TEXTURE_GROUP_OTHER ) );
+	}
+
+	if ( !s_CascadedShadowColorTexture.IsValid() )
+	{
+		s_CascadedShadowColorTexture.Init( materials->FindTexture( "_rt_CascadedShadowColor", TEXTURE_GROUP_OTHER ) );
+	}
+
+	ITexture *pDepthTexture = s_CascadedShadowDepthTexture;
+	CMatRenderContextPtr pRenderContext( materials );
+	pRenderContext->SetIntRenderingParameter( INT_CASCADED_DEPTHTEXTURE, int(pDepthTexture) );
+
+	QAngle angCascadedAngles;
+	Vector vecLight, vecAmbient;
+	g_pCSMEnvLight->GetShadowMappingConstants( angCascadedAngles, vecLight, vecAmbient );
+
+	if ( sdk2013ce_csm_color_light.GetBool() )
+	{
+		int iParsed[ 4 ];
+		UTIL_StringToIntArray(iParsed, 4, sdk2013ce_csm_color_light.GetString());
+		vecLight = ConvertLightmapGammaToLinear( iParsed );
+	}
+
+	if (sdk2013ce_csm_color_ambient.GetBool())
+	{
+		int iParsed[ 4 ];
+		UTIL_StringToIntArray(iParsed, 4, sdk2013ce_csm_color_ambient.GetString());
+		vecAmbient = ConvertLightmapGammaToLinear( iParsed );
+	}
+
+	for ( int i = 0; i < 3; i++ )
+	{
+		vecAmbient[ i ] = MIN( vecAmbient[ i ], vecLight[ i ] );
+	}
+
+	Vector vecAmbientDelta = vecLight - vecAmbient;
+	vecAmbientDelta.NormalizeInPlace();
+	pRenderContext->SetVectorRenderingParameter( VECTOR_RENDERPARM_SDK2013CE_CASCADED_AMBIENT_MIN, vecAmbient );
+	pRenderContext->SetVectorRenderingParameter(VECTOR_RENDERPARM_SDK2013CE_CASCADED_AMBIENT_DELTA, vecAmbientDelta);
+
+	Vector vecFwd, vecRight, vecUp;
+	AngleVectors( angCascadedAngles, &vecFwd, &vecRight, &vecUp );
+
+	pRenderContext->SetVectorRenderingParameter(VECTOR_RENDERPARM_SDK2013CE_CASCADED_FORWARD, vecFwd);
+
+	Vector vecMainViewFwd;
+	AngleVectors( view.angles, &vecMainViewFwd );
+
+	CViewSetup cascadedShadowView;
+	cascadedShadowView.angles = angCascadedAngles;
+	cascadedShadowView.m_bOrtho = true;
+
+	cascadedShadowView.width = s_CascadedShadowDepthTexture->GetMappingWidth() / 2;
+	cascadedShadowView.height = s_CascadedShadowDepthTexture->GetMappingHeight();
+
+	cascadedShadowView.m_flAspectRatio = 1.0f;
+	cascadedShadowView.m_bDoBloomAndToneMapping = false;
+	cascadedShadowView.zFar = cascadedShadowView.zFarViewmodel = 2000.0f;
+	cascadedShadowView.zNear = cascadedShadowView.zNearViewmodel = 7.0f;
+	cascadedShadowView.fov = cascadedShadowView.fovViewmodel = 90.0f;
+
+	struct ShadowConfig_t
+	{
+		float flOrthoSize;
+		float flForwardOffset;
+		float flUVOffsetX;
+		float flViewDepthBiasHack;
+	} shadowConfigs[] = {
+		{ 64.0f, 0.0f, 0.25f, 0.0f },
+		{ 384.0f, 256.0f, 0.75f, 0.0f }
+	};
+	const int iCascadedShadowCount = ARRAYSIZE( shadowConfigs );
+
+	switch ( mode )
+	{
+	case CASCADEDCONFIG_NORMAL:
+		{
+			ShadowConfig_t &closeShadow = shadowConfigs[ 0 ];
+			ShadowConfig_t &farShadow = shadowConfigs[ 1 ];
+			closeShadow.flOrthoSize = 164.0f;
+			closeShadow.flForwardOffset = 102.0f;
+			farShadow.flOrthoSize = 786.0f;
+			farShadow.flForwardOffset = 384.0f;
+
+			vecMainViewFwd.z = 0.0f;
+			vecMainViewFwd.NormalizeInPlace();
+		}
+		break;
+
+	case CASCADEDCONFIG_SPACE:
+		{
+			ShadowConfig_t &closeShadow = shadowConfigs[ 0 ];
+			ShadowConfig_t &farShadow = shadowConfigs[ 1 ];
+			closeShadow.flOrthoSize = 4.0f;
+			closeShadow.flForwardOffset = 2.0f;
+			closeShadow.flUVOffsetX = 0.25f;
+			farShadow.flViewDepthBiasHack = 1.5f;
+		}
+		break;
+	}
+
+	vecMainViewFwd -= vecFwd * DotProduct( vecMainViewFwd, vecFwd );
+	
+	static VMatrix s_CSMSwapMatrix[2];
+	static int s_iCSMSwapIndex = 0;
+
+	C_BasePlayer *pPlayer = C_BasePlayer::GetLocalPlayer();
+
+	Vector vecCascadeOrigin( ( mode == CASCADEDCONFIG_SPACE ) ? view.origin :
+		pPlayer ? pPlayer->GetRenderOrigin() : vec3_origin );
+	vecCascadeOrigin -= vecFwd * 1024.0f;
+
+	// This can only be set once per frame, not per shadow view. Fuckers.
+	if ( mode == CASCADEDCONFIG_SPACE )
+	{
+		pRenderContext->SetShadowDepthBiasFactors( 1.0f, 0.000005f );
+	}
+	else
+	{
+		pRenderContext->SetShadowDepthBiasFactors( 8.0f, 0.0005f );
+	}
+
+	for ( int i = 0; i < iCascadedShadowCount; i++ )
+	{
+		const ShadowConfig_t &shadowConfig = shadowConfigs[ i ];
+
+		cascadedShadowView.m_OrthoTop = -shadowConfig.flOrthoSize;
+		cascadedShadowView.m_OrthoRight = shadowConfig.flOrthoSize;
+		cascadedShadowView.m_OrthoBottom = shadowConfig.flOrthoSize;
+		cascadedShadowView.m_OrthoLeft = -shadowConfig.flOrthoSize;
+
+		cascadedShadowView.x = i * cascadedShadowView.width;
+		cascadedShadowView.y = 0;
+
+		Vector vecOrigin = vecCascadeOrigin + vecMainViewFwd * shadowConfig.flForwardOffset;
+		const float flViewFrustumWidthScale = shadowConfig.flOrthoSize * 2.0f / cascadedShadowView.width;
+		const float flViewFrustumHeightScale = shadowConfig.flOrthoSize * 2.0f / cascadedShadowView.height;
+		const float flFractionX = fmod( DotProduct( vecOrigin, vecRight ), flViewFrustumWidthScale );
+		const float flFractionY = fmod( DotProduct( vecOrigin, vecUp ), flViewFrustumHeightScale );
+		vecOrigin -= flFractionX * vecRight;
+		vecOrigin -= flFractionY * vecUp;
+
+		if ( i > 0 )
+		{
+			const ShadowConfig_t &prevShadowConfig = shadowConfigs[ i - 1 ];
+			const float flCascadedScale = prevShadowConfig.flOrthoSize / shadowConfig.flOrthoSize;
+			Vector vecOffsetShadowMapSpace = vecOrigin - cascadedShadowView.origin;
+			Vector2D vecCascadedOffset( DotProduct( -vecRight, vecOffsetShadowMapSpace ) * 0.5f,
+				DotProduct( vecUp, vecOffsetShadowMapSpace ) );
+			vecCascadedOffset *= 0.5f / shadowConfig.flOrthoSize;
+
+			vecCascadedOffset.x = vecCascadedOffset.x + 0.5f + 0.25f * ( 1.0f - flCascadedScale );
+			vecCascadedOffset.y = vecCascadedOffset.y + 0.5f - flCascadedScale * 0.5f;
+
+			vecOffsetShadowMapSpace.Init( flCascadedScale, vecCascadedOffset.x, vecCascadedOffset.y );
+			pRenderContext->SetVectorRenderingParameter(VECTOR_RENDERPARM_SDK2013CE_CASCADED_STEP, vecOffsetShadowMapSpace);
+		}
+
+		cascadedShadowView.origin = vecOrigin;
+
+		VMatrix worldToView, viewToProjection, worldToProjection, worldToTexture;
+		render->GetMatricesForView( cascadedShadowView, &worldToView, &viewToProjection, &worldToProjection, &worldToTexture );
+
+		if ( i == 0 )
+		{
+			VMatrix tmp;
+			MatrixBuildScale( tmp, 0.25f, -0.5f, 1.0f );
+			tmp[0][3] = shadowConfig.flUVOffsetX;
+			tmp[1][3] = 0.5f;
+
+			VMatrix &currentSwapMatrix = s_CSMSwapMatrix[ s_iCSMSwapIndex ];
+			MatrixMultiply( tmp, worldToProjection, currentSwapMatrix );
+			pRenderContext->SetIntRenderingParameter( INT_CASCADED_MATRIX_ADDRESS_0, (int)&currentSwapMatrix );
+		}
+
+		cascadedShadowView.origin -= vecFwd * shadowConfig.flViewDepthBiasHack;
+		UpdateShadowDepthTexture( s_CascadedShadowColorTexture, s_CascadedShadowDepthTexture, cascadedShadowView );
+	}
+
+	s_iCSMSwapIndex = ( s_iCSMSwapIndex + 1 ) % 2;
+}
 
 //-----------------------------------------------------------------------------
 // Queues up an overlay rendering
@@ -1912,7 +2134,6 @@ void CViewRender::FreezeFrame( float flFreezeTime )
 
 const char *COM_GetModDirectory();
 
-
 //-----------------------------------------------------------------------------
 // Purpose: This renders the entire 3D view and the in-game hud/viewmodel
 // Input  : &view - 
@@ -1948,6 +2169,7 @@ void CViewRender::RenderView( const CViewSetup &view, int nClearFlags, int whatT
 
 	CMatRenderContextPtr pRenderContext( materials );
 	ITexture *saveRenderTarget = pRenderContext->GetRenderTarget();
+	CascadedConfigMode cascadedMode = CASCADEDCONFIG_NORMAL;
 	pRenderContext.SafeRelease(); // don't want to hold for long periods in case in a locking active share thread mode
 
 	if ( !m_rbTakeFreezeFrame[ view.m_eStereoEye ] && m_flFreezeFrameUntil > gpGlobals->curtime )
@@ -2011,7 +2233,8 @@ void CViewRender::RenderView( const CViewSetup &view, int nClearFlags, int whatT
 		// Render world and all entities, particles, etc.
 		if( !g_pIntroData )
 		{
-			ViewDrawScene( bDrew3dSkybox, nSkyboxVisible, view, nClearFlags, VIEW_MAIN, whatToDraw & RENDERVIEW_DRAWVIEWMODEL );
+			ViewDrawScene( cascadedMode, bDrew3dSkybox, nSkyboxVisible, view, nClearFlags, VIEW_MAIN,
+				( whatToDraw & RENDERVIEW_DRAWVIEWMODEL ) != 0 );
 		}
 		else
 		{
@@ -3117,7 +3340,7 @@ bool CViewRender::DrawOneMonitor( ITexture *pRenderTarget, int cameraNum, C_Poin
 	// @MULTICORE (toml 8/11/2006): this should be a renderer....
 	Frustum frustum;
  	render->Push3DView( monitorView, VIEW_CLEAR_DEPTH | VIEW_CLEAR_COLOR, pRenderTarget, (VPlane *)frustum );
-	ViewDrawScene( false, SKYBOX_2DSKYBOX_VISIBLE, monitorView, 0, VIEW_MONITOR );
+	ViewDrawScene( CASCADEDCONFIG_NONE, false, SKYBOX_2DSKYBOX_VISIBLE, monitorView, 0, VIEW_MONITOR );
  	render->PopView( frustum );
 
 	// Reset the world fog parameters.
@@ -4997,6 +5220,9 @@ void CShadowDepthView::Draw()
 		render->Push3DView( (*this), VIEW_CLEAR_DEPTH, m_pRenderTarget, GetFrustum() );
 	}
 
+	pRenderContext.GetFrom( materials );
+	pRenderContext->PushRenderTargetAndViewport( m_pRenderTarget, m_pDepthTexture, x, y, width, height );
+	pRenderContext.SafeRelease();
 	SetupCurrentView( origin, angles, VIEW_SHADOW_DEPTH_TEXTURE );
 
 	MDLCACHE_CRITICAL_SECTION();
@@ -5022,7 +5248,7 @@ void CShadowDepthView::Draw()
 
 	// Draw opaque and translucent renderables with appropriate override materials
 	// OVERRIDE_DEPTH_WRITE is OK with a NULL material pointer
-	modelrender->ForcedMaterialOverride( NULL, OVERRIDE_DEPTH_WRITE );	
+	modelrender->ForcedMaterialOverride( NULL, OVERRIDE_DEPTH_WRITE );
 
 	{
 		VPROF_BUDGET( "DrawOpaqueRenderables", VPROF_BUDGETGROUP_SHADOW_DEPTH_TEXTURING );
