@@ -46,7 +46,7 @@ enum ShadowFlags_t
 
 #define SHADOW_FLAGS_PROJECTED_TEXTURE_TYPE_MASK ( SHADOW_FLAGS_FLASHLIGHT | SHADOW_FLAGS_SHADOW )
 
-
+#define SHADOW_FLAGS_PLAYER_FLASHLIGHT ( 1 << 16 ) // GSTRINGMIGRATION
 //-----------------------------------------------------------------------------
 //
 // Shadow-related functionality exported by the engine
