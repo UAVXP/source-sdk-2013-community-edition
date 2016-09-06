@@ -17,16 +17,18 @@ class CFlashlightEffect
 {
 public:
 
-	CFlashlightEffect(int nEntIndex = 0);
+	CFlashlightEffect( int nEntIndex = 0, const char *pszFlashlightTexture = NULL );
 	virtual ~CFlashlightEffect();
 
-	virtual void UpdateLight(const Vector &vecPos, const Vector &vecDir, const Vector &vecRight, const Vector &vecUp, int nDistance);
+	virtual void UpdateLight(const Vector &vecPos, const Vector &vecDir, const Vector &vecRight, const Vector &vecUp, int nDistance, bool bUseOffset = true);
 	void TurnOn();
 	void TurnOff();
 	bool IsOn( void ) { return m_bIsOn;	}
 
 	ClientShadowHandle_t GetFlashlightHandle( void ) { return m_FlashlightHandle; }
 	void SetFlashlightHandle( ClientShadowHandle_t Handle ) { m_FlashlightHandle = Handle;	}
+
+	float GetHorizontalFOV() const { return m_flHorizontalFOV; } // GSTRINGMIGRATION
 	
 protected:
 
@@ -34,7 +36,7 @@ protected:
 	void LightOffOld();
 	void LightOffNew();
 
-	void UpdateLightNew(const Vector &vecPos, const Vector &vecDir, const Vector &vecRight, const Vector &vecUp);
+	void UpdateLightNew(const Vector &vecPos, const Vector &vecDir, const Vector &vecRight, const Vector &vecUp, bool bUseOffset);
 	void UpdateLightOld(const Vector &vecPos, const Vector &vecDir, int nDistance);
 
 	bool m_bIsOn;
@@ -47,6 +49,8 @@ protected:
 
 	// Texture for flashlight
 	CTextureReference m_FlashlightTexture;
+
+	float m_flHorizontalFOV; // GSTRINGMIGRATION
 };
 
 class CHeadlightEffect : public CFlashlightEffect

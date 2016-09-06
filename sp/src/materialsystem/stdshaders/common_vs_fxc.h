@@ -798,6 +798,52 @@ float VertexAttenInternal( const float3 worldPos, int lightNum )
 	return result;
 }
 
+void SplitVertexAttenInternal( const float3 worldPos, int lightNum, const float3 colorIn,
+							   out float3 pointSpotOut, inout float3 directionalOut )
+{
+	// Get light direction
+	float3 lightDir = cLightInfo[lightNum].pos - worldPos;
+
+	// Get light distance squared.
+	float lightDistSquared = dot( lightDir, lightDir );
+
+	// Get 1/lightDistance
+	float ooLightDist = rsqrt( lightDistSquared );
+
+	// Normalize light direction
+	lightDir *= ooLightDist;
+
+	float3 vDist;
+#	if defined( _X360 )
+	{
+		//X360 dynamic compile hits an internal compiler error using dst(), this is the breakdown of how dst() works from the 360 docs.
+		vDist.x = 1;
+		vDist.y = lightDistSquared * ooLightDist;
+		vDist.z = lightDistSquared;
+		//flDist.w = ooLightDist;
+	}
+#	else
+	{
+		vDist = dst( lightDistSquared, ooLightDist );
+	}
+#	endif
+
+	float flDistanceAtten = 1.0f / dot( cLightInfo[lightNum].atten.xyz, vDist );
+
+	// Spot attenuation
+	float flCosTheta = dot( cLightInfo[lightNum].dir.xyz, -lightDir );
+	float flSpotAtten = (flCosTheta - cLightInfo[lightNum].spotParams.z) * cLightInfo[lightNum].spotParams.w;
+	flSpotAtten = max( 0.0001f, flSpotAtten );
+	flSpotAtten = pow( flSpotAtten, cLightInfo[lightNum].spotParams.x );
+	flSpotAtten = saturate( flSpotAtten );
+
+	// Select between point and spot
+	float flAtten = lerp( flDistanceAtten, flDistanceAtten * flSpotAtten, cLightInfo[lightNum].dir.w );
+
+	pointSpotOut = colorIn * flAtten * ( 1.0f - cLightInfo[lightNum].color.w );
+	directionalOut += colorIn * cLightInfo[lightNum].color.w;
+}
+
 float CosineTermInternal( const float3 worldPos, const float3 worldNormal, int lightNum, bool bHalfLambert )
 {
 	// Calculate light direction assuming this is a point or spot
@@ -842,18 +888,45 @@ float GetVertexAttenForLight( const float3 worldPos, int lightNum, bool bUseStat
 	return result;
 }
 
-float3 DoLightInternal( const float3 worldPos, const float3 worldNormal, int lightNum, bool bHalfLambert )
+float3 DoLightInternal( const float3 worldPos, const float3 worldNormal, int lightNum, bool bHalfLambert
+#if defined( USE_SEPARATE_DIRECTIONAL_LIGHT )
+					    , inout float3 directionalLight
+#endif
+					  )
 {
+#if defined( USE_SEPARATE_DIRECTIONAL_LIGHT )
+	//float directionalToggle = 0.0f;
+	//float3 pointSpotColor = cLightInfo[lightNum].color *
+	//	CosineTermInternal( worldPos, worldNormal, lightNum, bHalfLambert ) *
+	//	VertexAttenInternal( worldPos, lightNum, directionalToggle );
+	//directionalLight = pointSpotColor * directionalToggle;
+	//pointSpotColor = pointSpotColor * (1.0f - directionalToggle );
+	
+	float3 pointSpotColor;
+	float3 color = cLightInfo[lightNum].color *
+		CosineTermInternal( worldPos, worldNormal, lightNum, bHalfLambert );
+	SplitVertexAttenInternal( worldPos, lightNum, color, pointSpotColor, directionalLight );
+	return pointSpotColor;
+#else
 	return cLightInfo[lightNum].color *
 		CosineTermInternal( worldPos, worldNormal, lightNum, bHalfLambert ) *
 		VertexAttenInternal( worldPos, lightNum );
+#endif
 }
 
 float3 DoLighting( const float3 worldPos, const float3 worldNormal,
 				   const float3 staticLightingColor, const bool bStaticLight,
-				   const bool bDynamicLight, bool bHalfLambert )
+				   const bool bDynamicLight, bool bHalfLambert
+#if defined( USE_SEPARATE_DIRECTIONAL_LIGHT )
+				   , out float3 directionalLight
+#endif
+				   )
 {
 	float3 linearColor = float3( 0.0f, 0.0f, 0.0f );
+
+#if defined( USE_SEPARATE_DIRECTIONAL_LIGHT )
+	directionalLight = (float3)0;
+#endif
 
 	if( bStaticLight )			// Static light
 	{
@@ -869,8 +942,12 @@ float3 DoLighting( const float3 worldPos, const float3 worldNormal,
 	{
 		for (int i = 0; i < g_nLightCount; i++)
 		{
-			linearColor += DoLightInternal( worldPos, worldNormal, i, bHalfLambert );
-		}		
+			linearColor += DoLightInternal( worldPos, worldNormal, i, bHalfLambert
+#if defined( USE_SEPARATE_DIRECTIONAL_LIGHT )
+			, directionalLight
+#endif
+			);
+		}
 	}
 
 	if( bDynamicLight )
@@ -894,6 +971,7 @@ float3 DoLightingUnrolled( const float3 worldPos, const float3 worldNormal,
 
 	if( bDynamicLight )			// Ambient light
 	{
+#if !defined( USE_SEPARATE_DIRECTIONAL_LIGHT )
 		if ( nNumLights >= 1 )
 			linearColor += DoLightInternal( worldPos, worldNormal, 0, bHalfLambert );
 		if ( nNumLights >= 2 )
@@ -902,6 +980,7 @@ float3 DoLightingUnrolled( const float3 worldPos, const float3 worldNormal,
 			linearColor += DoLightInternal( worldPos, worldNormal, 2, bHalfLambert );
 		if ( nNumLights >= 4 )
 			linearColor += DoLightInternal( worldPos, worldNormal, 3, bHalfLambert );
+#endif
 	}
 
 	if( bDynamicLight )

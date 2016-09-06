@@ -35,22 +35,25 @@ void r_newflashlightCallback_f( IConVar *pConVar, const char *pOldString, float 
 static ConVar r_newflashlight( "r_newflashlight", "1", FCVAR_CHEAT, "", r_newflashlightCallback_f );
 static ConVar r_swingflashlight( "r_swingflashlight", "1", FCVAR_CHEAT );
 static ConVar r_flashlightlockposition( "r_flashlightlockposition", "0", FCVAR_CHEAT );
-static ConVar r_flashlightfov( "r_flashlightfov", "45.0", FCVAR_CHEAT );
+static ConVar r_flashlightfov( "r_flashlightfov", "45.0" );
 static ConVar r_flashlightoffsetx( "r_flashlightoffsetx", "10.0", FCVAR_CHEAT );
 static ConVar r_flashlightoffsety( "r_flashlightoffsety", "-20.0", FCVAR_CHEAT );
 static ConVar r_flashlightoffsetz( "r_flashlightoffsetz", "24.0", FCVAR_CHEAT );
 static ConVar r_flashlightnear( "r_flashlightnear", "4.0", FCVAR_CHEAT );
-static ConVar r_flashlightfar( "r_flashlightfar", "750.0", FCVAR_CHEAT );
-static ConVar r_flashlightconstant( "r_flashlightconstant", "0.0", FCVAR_CHEAT );
-static ConVar r_flashlightlinear( "r_flashlightlinear", "100.0", FCVAR_CHEAT );
-static ConVar r_flashlightquadratic( "r_flashlightquadratic", "0.0", FCVAR_CHEAT );
+static ConVar r_flashlightfar( "r_flashlightfar", "500.0" );
+static ConVar r_flashlightconstant( "r_flashlightconstant", "0.0" );
+static ConVar r_flashlightlinear( "r_flashlightlinear", "25.0" );
+static ConVar r_flashlightquadratic( "r_flashlightquadratic", "5000.0" );
 static ConVar r_flashlightvisualizetrace( "r_flashlightvisualizetrace", "0", FCVAR_CHEAT );
-static ConVar r_flashlightambient( "r_flashlightambient", "0.0", FCVAR_CHEAT );
-static ConVar r_flashlightshadowatten( "r_flashlightshadowatten", "0.35", FCVAR_CHEAT );
+static ConVar r_flashlightambient( "r_flashlightambient", "0.0" );
+static ConVar r_flashlightshadowatten( "r_flashlightshadowatten", "1" );
 static ConVar r_flashlightladderdist( "r_flashlightladderdist", "40.0", FCVAR_CHEAT );
 static ConVar mat_slopescaledepthbias_shadowmap( "mat_slopescaledepthbias_shadowmap", "16", FCVAR_CHEAT );
 static ConVar mat_depthbias_shadowmap(	"mat_depthbias_shadowmap", "0.0005", FCVAR_CHEAT  );
 
+// GSTRINGMIGRATION
+ClientShadowHandle_t g_hFlashlightHandle = CLIENTSHADOW_INVALID_HANDLE;
+// END GSTRINGMIGRATION
 
 void r_newflashlightCallback_f( IConVar *pConVar, const char *pOldString, float flOldValue )
 {
@@ -66,7 +69,7 @@ void r_newflashlightCallback_f( IConVar *pConVar, const char *pOldString, float 
 //			vecPos - The position of the light emitter.
 //			vecDir - The direction of the light emission.
 //-----------------------------------------------------------------------------
-CFlashlightEffect::CFlashlightEffect(int nEntIndex)
+CFlashlightEffect::CFlashlightEffect( int nEntIndex, const char *pszFlashlightTexture )
 {
 	m_FlashlightHandle = CLIENTSHADOW_INVALID_HANDLE;
 	m_nEntIndex = nEntIndex;
@@ -76,16 +79,22 @@ CFlashlightEffect::CFlashlightEffect(int nEntIndex)
 	if( engine->GetDXSupportLevel() < 70 )
 	{
 		r_newflashlight.SetValue( 0 );
-	}	
+	}
 
-	if ( g_pMaterialSystemHardwareConfig->SupportsBorderColor() )
+	if ( pszFlashlightTexture == NULL || !*pszFlashlightTexture )
 	{
-		m_FlashlightTexture.Init( "effects/flashlight_border", TEXTURE_GROUP_OTHER, true );
+		if ( g_pMaterialSystemHardwareConfig->SupportsBorderColor() )
+		{
+			pszFlashlightTexture = "effects/flashlight_border";
+		}
+		else
+		{
+			pszFlashlightTexture = "effects/flashlight001";
+		}
 	}
-	else
-	{
-		m_FlashlightTexture.Init( "effects/flashlight001", TEXTURE_GROUP_OTHER, true );
-	}
+
+	m_FlashlightTexture.Init( pszFlashlightTexture, TEXTURE_GROUP_OTHER, true );
+	m_flHorizontalFOV = 90.0f; // GSTRINGMIGRATION
 }
 
 
@@ -95,6 +104,10 @@ CFlashlightEffect::CFlashlightEffect(int nEntIndex)
 CFlashlightEffect::~CFlashlightEffect()
 {
 	LightOff();
+
+	// GSTRINGMIGRATION
+	g_hFlashlightHandle = CLIENTSHADOW_INVALID_HANDLE;
+	// END GSTRINGMIGRATION
 }
 
 
@@ -149,7 +162,7 @@ public:
 //-----------------------------------------------------------------------------
 // Purpose: Do the headlight
 //-----------------------------------------------------------------------------
-void CFlashlightEffect::UpdateLightNew(const Vector &vecPos, const Vector &vecForward, const Vector &vecRight, const Vector &vecUp )
+void CFlashlightEffect::UpdateLightNew(const Vector &vecPos, const Vector &vecForward, const Vector &vecRight, const Vector &vecUp, bool bUseOffset)
 {
 	VPROF_BUDGET( "CFlashlightEffect::UpdateLightNew", VPROF_BUDGETGROUP_SHADOW_DEPTH_TEXTURING );
 
@@ -163,7 +176,7 @@ void CFlashlightEffect::UpdateLightNew(const Vector &vecPos, const Vector &vecFo
 	const float flDistDrag = 0.2;
 
 	CTraceFilterSkipPlayerAndViewModel traceFilter;
-	float flOffsetY = r_flashlightoffsety.GetFloat();
+	float flOffsetY = bUseOffset ? r_flashlightoffsety.GetFloat() : 0.0f;
 
 	if( r_swingflashlight.GetBool() )
 	{
@@ -179,7 +192,7 @@ void CFlashlightEffect::UpdateLightNew(const Vector &vecPos, const Vector &vecFo
 	Vector vOrigin = vecPos + flOffsetY * vecUp;
 
 	// Not on ladder...trace a hull
-	if ( !bPlayerOnLadder ) 
+	if ( !bPlayerOnLadder && !bUseOffset )
 	{
 		trace_t pmOriginTrace;
 		UTIL_TraceHull( vecPos, vOrigin, Vector(-4, -4, -4), Vector(4, 4, 4), MASK_SOLID & ~(CONTENTS_HITBOX), &traceFilter, &pmOriginTrace );
@@ -320,6 +333,8 @@ void CFlashlightEffect::UpdateLightNew(const Vector &vecPos, const Vector &vecFo
 		state.m_fVerticalFOVDegrees = r_flashlightfov.GetFloat();
 	}
 
+	m_flHorizontalFOV = state.m_fHorizontalFOVDegrees; // GSTRINGMIGRATION
+
 	state.m_fConstantAtten = r_flashlightconstant.GetFloat();
 	state.m_Color[0] = 1.0f;
 	state.m_Color[1] = 1.0f;
@@ -350,6 +365,10 @@ void CFlashlightEffect::UpdateLightNew(const Vector &vecPos, const Vector &vecFo
 	}
 	
 	g_pClientShadowMgr->UpdateProjectedTexture( m_FlashlightHandle, true );
+
+	// GSTRINGMIGRATION
+	g_hFlashlightHandle = m_FlashlightHandle;
+	// END GSTRINGMIGRATION
 	
 	// Kill the old flashlight method if we have one.
 	LightOffOld();
@@ -419,7 +438,7 @@ void CFlashlightEffect::UpdateLightOld(const Vector &vecPos, const Vector &vecDi
 //-----------------------------------------------------------------------------
 // Purpose: Do the headlight
 //-----------------------------------------------------------------------------
-void CFlashlightEffect::UpdateLight(const Vector &vecPos, const Vector &vecDir, const Vector &vecRight, const Vector &vecUp, int nDistance)
+void CFlashlightEffect::UpdateLight(const Vector &vecPos, const Vector &vecDir, const Vector &vecRight, const Vector &vecUp, int nDistance, bool bUseOffset)
 {
 	if ( !m_bIsOn )
 	{
@@ -427,7 +446,7 @@ void CFlashlightEffect::UpdateLight(const Vector &vecPos, const Vector &vecDir, 
 	}
 	if( r_newflashlight.GetBool() )
 	{
-		UpdateLightNew( vecPos, vecDir, vecRight, vecUp );
+		UpdateLightNew( vecPos, vecDir, vecRight, vecUp, bUseOffset );
 	}
 	else
 	{
@@ -460,6 +479,9 @@ void CFlashlightEffect::LightOffNew()
 		g_pClientShadowMgr->DestroyFlashlight( m_FlashlightHandle );
 		m_FlashlightHandle = CLIENTSHADOW_INVALID_HANDLE;
 	}
+
+	// GSTRINGMIGRATION
+	g_hFlashlightHandle = CLIENTSHADOW_INVALID_HANDLE;
 }
 
 //-----------------------------------------------------------------------------

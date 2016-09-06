@@ -1,4 +1,4 @@
-//========= Copyright Valve Corporation, All rights reserved. ============//
+//========= Copyright © 1996-2005, Valve LLC, All rights reserved. ============
 //
 // Purpose: 
 //
@@ -125,19 +125,21 @@ struct VertexLitGeneric_DX9_Vars_t
 	int m_nDepthBlendScale;
 
 	int m_nSelfIllumMask;
+	int m_nSelfIllumMaskFrame;
 	int m_nReceiveFlashlight;
 
-	int m_nBlendTintByBaseAlpha;
+	int m_nSelfIllumTwoTexture;
+	int m_nSelfIllumTwoTexture_Amount;
+	int m_nSelfIllumTwoTexture_Texture;
 
-	int m_nTintReplacesBaseColor;
-
+	int m_nTwoSidedLighting;
 };
 
 void InitParamsVertexLitGeneric_DX9( CBaseVSShader *pShader, IMaterialVar** params, const char *pMaterialName, bool bVertexLitGeneric, VertexLitGeneric_DX9_Vars_t &info );
 void InitVertexLitGeneric_DX9( CBaseVSShader *pShader, IMaterialVar** params, bool bVertexLitGeneric, VertexLitGeneric_DX9_Vars_t &info );
 void DrawVertexLitGeneric_DX9( CBaseVSShader *pShader, IMaterialVar** params, IShaderDynamicAPI *pShaderAPI, IShaderShadow* pShaderShadow,
 							   bool bVertexLitGeneric, VertexLitGeneric_DX9_Vars_t &info, VertexCompressionType_t vertexCompression,
-							   CBasePerMaterialContextData **pContextDataPtr
+							   CBasePerMaterialContextData **pContextDataPtr, bool bForceFlashlight = false
 	);
 
 

@@ -15,9 +15,9 @@
 static LightmappedGeneric_DX9_Vars_t s_info;
 
 
-DEFINE_FALLBACK_SHADER( WorldVertexTransition, WorldVertexTransition_DX9 )
+DEFINE_FALLBACK_SHADER( SDK_WorldVertexTransition, SDK_WorldVertexTransition_DX9 )
 
-BEGIN_VS_SHADER( WorldVertexTransition_DX9, "Help for WorldVertexTransition" )
+BEGIN_VS_SHADER( SDK_WorldVertexTransition_DX9, "Help for WorldVertexTransition" )
 
 	BEGIN_SHADER_PARAMS
 		SHADER_PARAM( ALBEDO, SHADER_PARAM_TYPE_TEXTURE, "shadertest/BaseTexture", "albedo (Base texture with no baked lighting)" )
@@ -126,6 +126,9 @@ BEGIN_VS_SHADER( WorldVertexTransition_DX9, "Help for WorldVertexTransition" )
 		if( g_pHardwareConfig->GetDXSupportLevel() < 90 )
 			return "WorldVertexTransition_DX8";
 
+		if ( UsingEditor( params ) )
+			return "WorldVertexTransition";
+		
 		return 0;
 	}
 
@@ -143,13 +146,13 @@ BEGIN_VS_SHADER( WorldVertexTransition_DX9, "Help for WorldVertexTransition" )
 
 	SHADER_DRAW
 	{
-		if ( UsingEditor( params ) )
-		{
-			WorldVertexTransitionEditor_DX8_Vars_t info;
-			SetupVars( info );
-			DrawWorldVertexTransitionEditor_DX8( this, params, pShaderAPI, pShaderShadow, info );
-			return;
-		}
+		//if ( UsingEditor( params ) )
+		//{
+		//	WorldVertexTransitionEditor_DX8_Vars_t info;
+		//	SetupVars( info );
+		//	DrawWorldVertexTransitionEditor_DX8( this, params, pShaderAPI, pShaderShadow, info );
+		//	return;
+		//}
 
 		DrawLightmappedGeneric_DX9( this, params, pShaderAPI, pShaderShadow, s_info, pContextDataPtr );
 	}
